@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Fonction pour vérifier si l'utilisateur est authentifié
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Fonction pour vérifier si l'utilisateur est le propriétaire du document
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    // Fonction pour vérifier si l'utilisateur est coach
+    function isCoach() {
+      return exists(/databases/$(database)/documents/coaches/$(request.auth.uid));
+    }
+    
+    // Fonction pour vérifier si l'utilisateur est un assistant coach
+    function isAssistantCoach(teamId) {
+      return exists(/databases/$(database)/documents/teams/$(teamId)/assistants/$(request.auth.uid));
+    }
+    
+    // Fonction pour vérifier si l'utilisateur est coach ou assistant de l'équipe
+    function isTeamStaff(teamId) {
+      return isCoach() || isAssistantCoach(teamId);
+    }
+    
+    // Fonction pour vérifier si l'utilisateur est un joueur
+    function isPlayer() {
+      return exists(/databases/$(database)/documents/players/$(request.auth.uid));
+    }
+    
+    // Profils des utilisateurs
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && isOwner(userId);
+      allow delete: if false; // Interdire la suppression des profils
+    }
+    
+    // Joueurs
+    match /players/{playerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isCoach();
+      allow update: if isAuthenticated() && isCoach();
+      allow delete: if isAuthenticated() && isCoach();
+    }
+    
+    // Équipes
+    match /teams/{teamId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isCoach();
+      allow update: if isAuthenticated() && isTeamStaff(teamId);
+      allow delete: if isAuthenticated() && isCoach();
+      
+      // Sous-collections de l'équipe
+      match /assistants/{assistantId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && isCoach();
+      }
+    }
+    
+    // Matchs
+    match /matches/{matchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isCoach();
+      allow update: if isAuthenticated() && (isCoach() || isAssistantCoach(resource.data.equipeId));
+      allow delete: if isAuthenticated() && isCoach();
+    }
+    
+    // Entraînements
+    match /trainings/{trainingId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isCoach();
+      allow update: if isAuthenticated() && (isCoach() || isAssistantCoach(resource.data.equipeId));
+      allow delete: if isAuthenticated() && isCoach();
+    }
+    
+    // Présences aux entraînements et matchs
+    match /attendances/{attendanceId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (isCoach() || isAssistantCoach(resource.data.equipeId));
+      allow delete: if isAuthenticated() && isCoach();
+    }
+    
+    // Statistiques des joueurs
+    match /stats/{statId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && (isCoach() || isAssistantCoach(resource.data.equipeId));
+      allow delete: if isAuthenticated() && isCoach();
+    }
+    
+    // Messages et communications
+    match /messages/{messageId} {
+      // Les joueurs peuvent lire leurs propres messages
+      allow read: if isAuthenticated() && 
+                    (isCoach() || 
+                     isAssistantCoach(resource.data.equipeId) || 
+                     (isPlayer() && (request.auth.uid in resource.data.recipients)));
+      
+      // Seuls les coaches et assistants peuvent créer des messages
+      allow create: if isAuthenticated() && (isCoach() || isAssistantCoach(resource.data.equipeId));
+      
+      // L'auteur du message peut le modifier
+      allow update: if isAuthenticated() && resource.data.authorId == request.auth.uid;
+      
+      // Seul l'auteur peut supprimer son message
+      allow delete: if isAuthenticated() && resource.data.authorId == request.auth.uid;
+    }
+  }
+}
